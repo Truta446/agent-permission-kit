@@ -1,0 +1,29 @@
+name: Bug report
+description: Something behaves differently from the docs
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security issue?** (for example, a handler ran without authorization) Please do **not** file it here. Follow SECURITY.md instead.
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Guard configuration, the request, and what you ran.
+      render: ts
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: agent-permission-kit 0.1.0, Node 24, @modelcontextprotocol/sdk 1.32
+    validations:
+      required: true

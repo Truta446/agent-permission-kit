@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="580" viewBox="0 0 1280 580" role="img" aria-labelledby="title desc">
+  <title id="title">How a tool call flows through the guard</title>
+  <desc id="desc">The input is validated and frozen, policy decides allow, require approval, or deny. Allowed and approved calls run the handler once with the authorized snapshot; everything else returns ok false with a reason. Every step emits an audit event.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1022"/>
+      <stop offset="1" stop-color="#131A3A"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#8A90B8"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#4ADE80"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#FBBF24"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#F87171"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, "Segoe UI", Ubuntu, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+      .box { fill: #141B3D; stroke: #FFFFFF; stroke-opacity: 0.14; }
+      .h { font-size: 17px; font-weight: 700; fill: #F1F2FA; }
+      .s { font-size: 13px; fill: #8A90B8; }
+      .line { fill: none; stroke: #8A90B8; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="580" rx="20" fill="url(#bg)"/>
+  <text x="32" y="52" class="sans" font-size="15" font-weight="700" fill="#8B7CFF" letter-spacing="2">HOW IT WORKS</text>
+  <text x="32" y="80" class="sans" font-size="22" font-weight="700" fill="#FFFFFF">guard.execute(toolCall, handler)</text>
+
+  <!-- A: tool call -->
+  <rect class="box" x="32" y="230" width="160" height="100" rx="14"/>
+  <text x="112" y="272" text-anchor="middle" class="sans h">Agent tool call</text>
+  <text x="112" y="298" text-anchor="middle" class="mono s">{ tool, input }</text>
+
+  <!-- B: snapshot -->
+  <rect class="box" x="228" y="230" width="180" height="100" rx="14"/>
+  <text x="318" y="272" text-anchor="middle" class="sans h">Validate + freeze</text>
+  <text x="318" y="298" text-anchor="middle" class="sans s">JSON-only snapshot</text>
+
+  <!-- C: policy -->
+  <rect class="box" x="444" y="230" width="200" height="100" rx="14" stroke="#8B7CFF" stroke-opacity="0.6"/>
+  <text x="544" y="272" text-anchor="middle" class="sans h">Policy rules</text>
+  <text x="544" y="298" text-anchor="middle" class="sans s">exact, prefix.*, default</text>
+
+  <path class="line" d="M192 280 H226" marker-end="url(#arrow)"/>
+  <path class="line" d="M408 280 H442" marker-end="url(#arrow)"/>
+
+  <!-- fork -->
+  <path class="line" d="M644 280 H672"/>
+  <path d="M672 110 V450" fill="none" stroke="#8A90B8" stroke-width="2"/>
+  <path d="M672 110 H698" fill="none" stroke="#4ADE80" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <path d="M672 280 H698" fill="none" stroke="#FBBF24" stroke-width="2" marker-end="url(#arrow-amber)"/>
+  <path d="M672 450 H698" fill="none" stroke="#F87171" stroke-width="2" marker-end="url(#arrow-red)"/>
+
+  <!-- decision badges -->
+  <rect x="700" y="92" width="170" height="36" rx="9" fill="#22C55E" fill-opacity="0.16" stroke="#22C55E" stroke-opacity="0.6"/>
+  <text x="785" y="116" text-anchor="middle" class="mono" font-size="15" font-weight="700" fill="#4ADE80">allow</text>
+  <rect x="700" y="262" width="170" height="36" rx="9" fill="#F59E0B" fill-opacity="0.16" stroke="#F59E0B" stroke-opacity="0.6"/>
+  <text x="785" y="286" text-anchor="middle" class="mono" font-size="15" font-weight="700" fill="#FBBF24">require_approval</text>
+  <rect x="700" y="432" width="170" height="36" rx="9" fill="#EF4444" fill-opacity="0.16" stroke="#EF4444" stroke-opacity="0.6"/>
+  <text x="785" y="456" text-anchor="middle" class="mono" font-size="15" font-weight="700" fill="#F87171">deny</text>
+
+  <!-- E: approver -->
+  <rect class="box" x="905" y="230" width="150" height="100" rx="14"/>
+  <text x="980" y="272" text-anchor="middle" class="sans h">Your approver</text>
+  <text x="980" y="298" text-anchor="middle" class="sans s">callback + timeout</text>
+  <path d="M870 280 H903" fill="none" stroke="#FBBF24" stroke-width="2" marker-end="url(#arrow-amber)"/>
+
+  <!-- D: handler -->
+  <rect x="1090" y="60" width="160" height="100" rx="14" fill="#22C55E" fill-opacity="0.10" stroke="#22C55E" stroke-opacity="0.55"/>
+  <text x="1170" y="100" text-anchor="middle" class="sans h">Handler runs</text>
+  <text x="1170" y="122" text-anchor="middle" class="sans s">once, with the</text>
+  <text x="1170" y="140" text-anchor="middle" class="sans s">authorized snapshot</text>
+  <path d="M870 110 H1088" fill="none" stroke="#4ADE80" stroke-width="2" marker-end="url(#arrow-green)"/>
+
+  <!-- F: refusal -->
+  <rect x="1090" y="400" width="160" height="100" rx="14" fill="#EF4444" fill-opacity="0.10" stroke="#EF4444" stroke-opacity="0.55"/>
+  <text x="1170" y="440" text-anchor="middle" class="mono" font-size="16" font-weight="700" fill="#F1F2FA">{ ok: false }</text>
+  <text x="1170" y="462" text-anchor="middle" class="sans s">code + reason,</text>
+  <text x="1170" y="480" text-anchor="middle" class="sans s">handler never runs</text>
+  <path d="M870 450 H1088" fill="none" stroke="#F87171" stroke-width="2" marker-end="url(#arrow-red)"/>
+
+  <!-- approver outcomes -->
+  <path d="M1055 262 H1150 V162" fill="none" stroke="#4ADE80" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="1160" y="216" class="sans" font-size="13" font-weight="600" fill="#4ADE80">approved: true</text>
+  <path d="M1055 298 H1150 V398" fill="none" stroke="#F87171" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow-red)"/>
+  <text x="1160" y="350" class="sans" font-size="13" font-weight="600" fill="#F87171">anything else</text>
+  <text x="1160" y="368" class="sans" font-size="12" fill="#8A90B8">rejected, error,</text>
+  <text x="1160" y="384" class="sans" font-size="12" fill="#8A90B8">timeout, missing</text>
+
+  <!-- failures fail closed -->
+  <text x="544" y="372" text-anchor="middle" class="sans" font-size="13" fill="#F87171">throws, times out or</text>
+  <text x="544" y="390" text-anchor="middle" class="sans" font-size="13" fill="#F87171">returns garbage: deny</text>
+
+  <!-- audit strip -->
+  <rect x="32" y="524" width="1218" height="34" rx="10" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <text x="52" y="546" class="sans" font-size="14" fill="#C7CBE6">Every step emits a frozen audit event to <tspan class="mono" fill="#F1F2FA">onAudit(event)</tspan>. Inputs are not logged unless you opt in.</text>
+</svg>
