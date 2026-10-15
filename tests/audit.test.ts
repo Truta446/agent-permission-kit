@@ -323,3 +323,56 @@ describe("audit handlers cannot change decisions", () => {
     expect(seen).toEqual(["tool.allowed", "handler", "execution.succeeded"]);
   });
 });
+
+describe("check() audit opt-in (#5)", () => {
+  it("emits policy.evaluated only when asked, without input by default", async () => {
+    const events: AuditEvent[] = [];
+    const guard = createGuard({ rules, onAudit: (e) => void events.push(e) });
+    await guard.check({ tool: "db.delete", input: { password: "x" } });
+    expect(events).toEqual([]);
+    const result = await guard.check(
+      { tool: "db.delete", input: { password: "x" } },
+      { audit: true },
+    );
+    expect(events).toEqual([
+      {
+        type: "policy.evaluated",
+        timestamp: expect.any(String),
+        requestId: result.requestId,
+        tool: "db.delete",
+        decision: "deny",
+        reason: "Denied by policy",
+        ruleId: "db.delete",
+      },
+    ]);
+  });
+
+  it("audits invalid requests and policy errors too", async () => {
+    const events: AuditEvent[] = [];
+    const guard = createGuard({
+      onAudit: (e) => void events.push(e),
+      rules: {
+        boom: () => {
+          throw new RangeError("x");
+        },
+      },
+    });
+    await guard.check({ tool: "bad name" }, { audit: true });
+    await guard.check({ tool: "boom" }, { audit: true });
+    expect(events).toMatchObject([
+      { type: "policy.evaluated", tool: "<invalid>", decision: "deny" },
+      { type: "policy.evaluated", tool: "boom", decision: "deny", errorName: "RangeError" },
+    ]);
+  });
+
+  it("a throwing audit handler cannot change the check result", async () => {
+    const guard = createGuard({
+      rules,
+      onAuditError: () => {},
+      onAudit: (e) => {
+        (e as { decision: string }).decision = "allow";
+      },
+    });
+    expect((await guard.check({ tool: "db.delete" }, { audit: true })).decision).toBe("deny");
+  });
+});

@@ -10,6 +10,7 @@ export type {
   AuditEventType,
   AuditHandler,
   AuditInputOption,
+  CheckOptions,
   Decision,
   DeepReadonly,
   DefaultDecision,

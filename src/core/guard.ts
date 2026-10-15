@@ -3,7 +3,7 @@ import { auditedInput, createAuditSink, defaultAuditErrorHandler } from "../audi
 import { errorName, GuardConfigError, own } from "./errors.js";
 import { isValidRequestId, isValidToolName } from "./names.js";
 import { compilePolicy, type Evaluation, evaluatePolicy } from "./policies.js";
-import { snapshotInput } from "./snapshot.js";
+import { DEFAULT_MAX_INPUT_NODES, snapshotInput } from "./snapshot.js";
 import type {
   ApprovalGrant,
   ApprovalRequest,
@@ -22,6 +22,7 @@ import type {
 
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
+const DEFAULT_AUDIT_TIMEOUT_MS = 5_000;
 /** Caller-supplied request ids remembered per guard for replay protection. */
 const RECENT_REQUEST_IDS = 10_000;
 
@@ -66,13 +67,28 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
   const generateRequestId =
     readFunction(own(options, "generateRequestId"), "generateRequestId") ??
     (() => crypto.randomUUID());
+  const auditTimeoutMs = readTimeout(
+    own(options, "auditTimeoutMs"),
+    "auditTimeoutMs",
+    DEFAULT_AUDIT_TIMEOUT_MS,
+  );
+  const maxInputNodes = readPositiveInteger(
+    own(options, "maxInputNodes"),
+    "maxInputNodes",
+    DEFAULT_MAX_INPUT_NODES,
+  );
   const requireAudit = own(options, "requireAudit") === true;
+  if (requireAudit && onAudit === undefined) {
+    // Otherwise nothing would ever be recorded and every call would still run.
+    throw new GuardConfigError("requireAudit: true needs an onAudit handler");
+  }
   const auditInputOption = readAuditInput(own(options, "auditInput"));
   const policy = compilePolicy(own(options, "rules"), defaultDecision, policyTimeoutMs);
 
   const audit = createAuditSink(
     onAudit as ((e: AuditEvent) => void | Promise<void>) | undefined,
     onAuditError as (error: unknown, event: AuditEvent) => void,
+    auditTimeoutMs,
   );
   const approve = onApprovalRequired as ((r: ApprovalRequest) => unknown) | undefined;
 
@@ -107,6 +123,16 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
   /** Validates a request and snapshots its input. Returns a denial on malformed input. */
   const prepare = (request: unknown): Prepared | PolicyResult => {
     const fallbackId = newRequestId();
+    try {
+      return prepareUnsafe(request, fallbackId);
+    } catch {
+      // Hostile request objects (throwing getters, Proxies) are refused like
+      // any other malformed request instead of rejecting the promise.
+      return invalid("<invalid>", fallbackId, "Malformed request");
+    }
+  };
+
+  const prepareUnsafe = (request: unknown, fallbackId: string): Prepared | PolicyResult => {
     if (typeof request !== "object" || request === null) {
       return invalid("<invalid>", fallbackId, "Request must be an object");
     }
@@ -117,21 +143,28 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
       return invalid(
         tool,
         fallbackId,
-        "requestId must be a non-empty string of at most 256 characters",
+        "requestId must be 1-256 printable ASCII characters without spaces",
       );
     }
     const requestId = rawId ?? fallbackId;
     if (tool === "<invalid>") return invalid(tool, requestId, "Invalid tool name");
     const signal = own(request, "signal");
-    if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    if (signal !== undefined && !isAbortSignal(signal)) {
       return invalid(tool, requestId, "signal must be an AbortSignal");
     }
     let input: unknown;
     try {
       const rawInput = own(request, "input");
-      input = rawInput === undefined ? undefined : snapshotInput(rawInput);
-    } catch {
-      return invalid(tool, requestId, "Input must be JSON-compatible data");
+      input = rawInput === undefined ? undefined : snapshotInput(rawInput, maxInputNodes);
+    } catch (error) {
+      const tooLarge = error instanceof Error && error.message === "Input is too large";
+      return invalid(
+        tool,
+        requestId,
+        tooLarge
+          ? `Input exceeds ${maxInputNodes} values`
+          : "Input must be JSON-compatible data without __proto__ keys",
+      );
     }
     return {
       tool,
@@ -177,11 +210,28 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
     };
   };
 
-  const check: Guard<TTools, TContext>["check"] = async (request) => {
+  const check: Guard<TTools, TContext>["check"] = async (request, checkOptions) => {
+    const withAudit =
+      typeof checkOptions === "object" &&
+      checkOptions !== null &&
+      own(checkOptions, "audit") === true;
     const prepared = prepare(request);
-    if (!("callerSuppliedId" in prepared)) return prepared;
-    const { errorName: _omit, ...result } = await evaluate(prepared);
-    return Object.freeze(result);
+    if (!("callerSuppliedId" in prepared)) {
+      if (withAudit)
+        await audit.emit(event("policy.evaluated", prepared, prepared.reason, undefined));
+      return prepared;
+    }
+    const { errorName: policyErrorName, ...result } = await evaluate(prepared);
+    const frozen = Object.freeze(result);
+    if (withAudit) {
+      // Emitted after the decision is final; the event cannot alter `frozen`.
+      await audit.emit(
+        event("policy.evaluated", frozen, frozen.reason, prepared.input, {
+          ...(policyErrorName !== undefined && { errorName: policyErrorName }),
+        }),
+      );
+    }
+    return frozen;
   };
 
   const execute = async (
@@ -364,6 +414,24 @@ function readTimeout(value: unknown, name: string, fallback: number): number {
     throw new GuardConfigError(`${name} must be a positive number of milliseconds`);
   }
   return value;
+}
+
+function readPositiveInteger(value: unknown, name: string, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new GuardConfigError(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+/** A real AbortSignal, not an object that merely inherits from its prototype. */
+function isAbortSignal(value: unknown): value is AbortSignal {
+  if (!(value instanceof AbortSignal)) return false;
+  try {
+    return typeof value.aborted === "boolean"; // throws on a forged signal
+  } catch {
+    return false;
+  }
 }
 
 function readFunction(value: unknown, name: string): ((...args: never[]) => unknown) | undefined {

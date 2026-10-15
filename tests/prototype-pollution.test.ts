@@ -93,16 +93,17 @@ describe("a polluted Object.prototype cannot grant access", () => {
 });
 
 describe("input keys", () => {
-  it("__proto__ in input stays data and does not change the snapshot's prototype", async () => {
+  it("a __proto__ key in input is rejected (it could smuggle fields past a policy via Object.assign)", async () => {
     const guard = createGuard({ rules: { t: "allow" } });
-    const input = JSON.parse('{"__proto__": {"isAdmin": true}, "name": "x"}');
-    const result = await guard.execute({ tool: "t", input }, (i) => i);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const value = result.value as Record<string, unknown>;
-    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
-    expect(value.isAdmin).toBeUndefined();
-    expect(Object.hasOwn(value, "__proto__")).toBe(true);
+    const fn = vi.fn();
+    for (const input of [
+      JSON.parse('{"__proto__": {"isAdmin": true}, "name": "x"}'),
+      JSON.parse('{"nested": {"__proto__": {"amount": 1000000}}}'),
+    ]) {
+      const result = await guard.execute({ tool: "t", input }, fn);
+      expect(result).toMatchObject({ ok: false, code: "invalid_request" });
+    }
+    expect(fn).not.toHaveBeenCalled();
   });
 
   it("null-prototype objects are accepted", async () => {

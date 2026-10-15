@@ -15,8 +15,12 @@ export function wildcardPrefix(key: string): string | null {
   return key.endsWith(".*") ? key.slice(0, -2) : null;
 }
 
-const MAX_REQUEST_ID_LENGTH = 256;
+/**
+ * Request ids: 1–256 printable ASCII characters (no spaces, newlines or escape
+ * codes), so an id copied into logs cannot forge or corrupt log lines.
+ */
+const REQUEST_ID = /^[\x21-\x7E]{1,256}$/;
 
 export function isValidRequestId(id: unknown): id is string {
-  return typeof id === "string" && id.length > 0 && id.length <= MAX_REQUEST_ID_LENGTH;
+  return typeof id === "string" && REQUEST_ID.test(id);
 }

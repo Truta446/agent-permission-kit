@@ -253,6 +253,52 @@ describe.each(sdks)("MCP %s", (_label, make) => {
     expect(approver).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  it("a pre-wrapped handler is re-bound to the registration name (copy-paste safety)", async () => {
+    const { server, connect } = make();
+    const guard = createGuard({ rules: { "db.read": "allow", "db.drop": "deny" } });
+    guardMcpServer(server, guard);
+    const drop = vi.fn(async () => ({ content: [{ type: "text" as const, text: "dropped" }] }));
+    // Wrapped under the wrong name by mistake: the registration name must win.
+    server.registerTool("db.drop", {}, guardToolHandler(guard, "db.read", drop));
+    const client = await connect();
+    expect((await client.call("db.drop")).isError).toBe(true);
+    expect(drop).not.toHaveBeenCalled();
+  });
+
+  it("a pre-wrapped handler follows update({ name })", async () => {
+    const { server, connect } = make();
+    const guard = createGuard({ rules: { "notes.read": "allow", "notes.purge": "deny" } });
+    guardMcpServer(server, guard);
+    const purge = vi.fn(async () => ({ content: [{ type: "text" as const, text: "purged" }] }));
+    const registered = server.registerTool(
+      "notes.read",
+      {},
+      guardToolHandler(guard, "notes.read", purge),
+    );
+    registered.update({ name: "notes.purge" });
+    const client = await connect();
+    expect((await client.call("notes.purge")).isError).toBe(true);
+    expect(purge).not.toHaveBeenCalled();
+  });
+
+  it("registration paths that bypass registerTool are blocked", () => {
+    const { server } = make();
+    guardMcpServer(server, createGuard({ rules: {} }));
+    expect(() =>
+      server._createRegisteredTool(
+        "x",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        async () => ({ content: [] }),
+      ),
+    ).toThrow(/bypasses the guard/);
+  });
 });
 
 describe("MCP v1-specific bypass paths", () => {
@@ -275,11 +321,55 @@ describe("MCP v1-specific bypass paths", () => {
     expect(() => server.tool("x", async () => ({ content: [] }))).toThrow(/disabled/);
   });
 
+  it("experimental registerToolTask is disabled (it would register an unguarded task tool)", () => {
+    const server = new McpServerV1({ name: "t", version: "1" });
+    guardMcpServer(server, createGuard({ rules: { "db.drop": "deny" } }));
+    expect(() =>
+      server.experimental.tasks.registerToolTask(
+        "db.drop",
+        { execution: { taskSupport: "optional" } } as never,
+        { createTask: async () => ({}) } as never,
+      ),
+    ).toThrow(/disabled by guardMcpServer/);
+  });
+
   it("non-function handlers are refused instead of registered unguarded", () => {
     const server = new McpServerV1({ name: "t", version: "1" });
     guardMcpServer(server, createGuard({ rules: {} }));
     expect(() => server.registerTool("x", {}, { createTask: () => {} } as never)).toThrow(
       TypeError,
     );
+  });
+});
+
+describe("guardToolHandler used on its own", () => {
+  const extra = { signal: new AbortController().signal };
+  /** Calls a wrapped handler the way the SDK does for a tool without an input schema. */
+  const callNoArgs = (h: unknown) => (h as (extra: unknown) => Promise<unknown>)(extra);
+
+  it("re-wrapping with another name re-binds the policy to that name", async () => {
+    const guard = createGuard({ rules: { "db.read": "allow", "db.drop": "deny" } });
+    const drop = vi.fn(async () => ({ content: [] }));
+    const handler = guardToolHandler(guard, "db.drop", guardToolHandler(guard, "db.read", drop));
+    const result = (await callNoArgs(handler)) as CallResult;
+    expect(result.isError).toBe(true);
+    expect(drop).not.toHaveBeenCalled();
+  });
+
+  it("the outermost name wins: the inner binding is replaced, not stacked", async () => {
+    const guard = createGuard({ rules: { "a.ok": "allow", "a.no": "deny" } });
+    const fn = vi.fn(async () => ({ content: [] }));
+    await callNoArgs(guardToolHandler(guard, "a.ok", guardToolHandler(guard, "a.no", fn)));
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-wrapping with the same name does not ask for approval twice", async () => {
+    const approver = vi.fn(async () => ({ approved: true as const }));
+    const guard = createGuard({ rules: { t: "require_approval" }, onApprovalRequired: approver });
+    const fn = vi.fn(async () => ({ content: [] }));
+    const handler = guardToolHandler(guard, "t", guardToolHandler(guard, "t", fn));
+    await callNoArgs(handler);
+    expect(approver).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

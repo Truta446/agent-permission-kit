@@ -50,11 +50,24 @@ export interface McpGuardOptions<TContext = unknown> {
 }
 
 const GUARDED = Symbol.for("agent-permission-kit.mcp.guarded");
+const RAW = Symbol.for("agent-permission-kit.mcp.raw");
+const BOUND_NAME = Symbol.for("agent-permission-kit.mcp.bound-name");
 
 type AnyHandler = (...args: unknown[]) => unknown;
 
 interface GuardedHandler extends AnyHandler {
   [GUARDED]?: Guard<ToolMap, unknown>;
+  [RAW]?: AnyHandler;
+  [BOUND_NAME]?: string;
+}
+
+/** Strips this guard's wrappers, returning the handler the application wrote. */
+function unwrap(handler: AnyHandler, guard: unknown): AnyHandler {
+  let current = handler as GuardedHandler;
+  while (current[GUARDED] === guard && typeof current[RAW] === "function") {
+    current = current[RAW] as GuardedHandler;
+  }
+  return current;
 }
 
 function defaultDenied(denial: { tool: string; reason: string }): McpToolResult {
@@ -93,8 +106,12 @@ export function guardToolHandler<H extends (...args: never[]) => unknown>(
   options: McpGuardOptions = {},
 ): H {
   if (typeof handler !== "function") throw new TypeError("guardToolHandler() requires a handler");
-  const raw = handler as unknown as GuardedHandler;
-  if (raw[GUARDED] === guard) return handler; // already guarded by this guard: never prompt twice
+  const existing = handler as unknown as GuardedHandler;
+  // Already guarded by this guard under this name: wrapping again would prompt twice.
+  if (existing[GUARDED] === guard && existing[BOUND_NAME] === toolName) return handler;
+  // Guarded by this guard under another name: re-bind to `toolName` instead of
+  // trusting the old binding (renames, copy-paste mistakes).
+  const raw = unwrap(existing, guard);
 
   const onDenied = options.onDenied ?? defaultDenied;
   const toContext = options.context;
@@ -127,6 +144,8 @@ export function guardToolHandler<H extends (...args: never[]) => unknown>(
     });
   };
   wrapped[GUARDED] = guard;
+  wrapped[RAW] = raw;
+  wrapped[BOUND_NAME] = toolName;
   return wrapped as unknown as H;
 }
 
@@ -179,7 +198,7 @@ export function guardMcpServer<S extends GuardableMcpServer>(
       );
     }
     let currentName = name;
-    let currentRaw = cb as AnyHandler;
+    let currentRaw = unwrap(cb as AnyHandler, guard);
     const registered = originalRegister(
       name,
       config,
@@ -197,8 +216,8 @@ export function guardMcpServer<S extends GuardableMcpServer>(
           if (typeof next !== "function") {
             throw new TypeError("guardMcpServer(): tool handler must be a function");
           }
-          if ((next as GuardedHandler)[GUARDED] !== guard) currentRaw = next as AnyHandler;
-          current = guardToolHandler(guard, currentName, next as AnyHandler, options);
+          currentRaw = unwrap(next as AnyHandler, guard);
+          current = guardToolHandler(guard, currentName, currentRaw, options);
         },
         enumerable: true,
         configurable: false,
@@ -210,7 +229,8 @@ export function guardMcpServer<S extends GuardableMcpServer>(
       registered.update = (updates: Record<string, unknown>) => {
         const next = { ...updates };
         const renamed = typeof next.name === "string" && next.name !== currentName;
-        if (typeof next.callback === "function") currentRaw = next.callback as AnyHandler;
+        if (typeof next.callback === "function")
+          currentRaw = unwrap(next.callback as AnyHandler, guard);
         if (renamed) currentName = next.name as string;
         if (typeof next.callback === "function" || renamed) {
           next.callback = guardToolHandler(guard, currentName, currentRaw, options);
@@ -220,6 +240,35 @@ export function guardMcpServer<S extends GuardableMcpServer>(
     }
     return registered;
   };
+
+  // Every registration path in SDK v1 and v2 (registerTool, the deprecated
+  // tool(), v1's experimental registerToolTask) ends in `_createRegisteredTool`
+  // with the handler as its last argument. Refuse anything that reaches it
+  // without having been wrapped above, so a path we don't know about fails
+  // closed instead of registering an unguarded tool.
+  const internal = server as unknown as { _createRegisteredTool?: (...args: unknown[]) => unknown };
+  if (typeof internal._createRegisteredTool === "function") {
+    const originalCreate = internal._createRegisteredTool.bind(server);
+    internal._createRegisteredTool = (...args: unknown[]) => {
+      const handler = args[args.length - 1] as GuardedHandler | undefined;
+      if (typeof handler !== "function" || handler[GUARDED] !== guard) {
+        throw new TypeError(
+          "guardMcpServer(): blocked a tool registration that bypasses the guard; use server.registerTool()",
+        );
+      }
+      return originalCreate(...args);
+    };
+  }
+
+  const tasks = (server as unknown as { experimental?: { tasks?: { registerToolTask?: unknown } } })
+    .experimental?.tasks;
+  if (tasks && typeof tasks.registerToolTask === "function") {
+    tasks.registerToolTask = () => {
+      throw new TypeError(
+        "server.experimental.tasks.registerToolTask() is disabled by guardMcpServer(): task-based tools cannot be guarded yet",
+      );
+    };
+  }
 
   if (typeof server.tool === "function") {
     server.tool = () => {

@@ -202,6 +202,8 @@ export type ApprovalHandler<TTools extends ToolMap, TContext> = (
 // ------------------------------------------------------------------- audit
 
 export type AuditEventType =
+  /** Emitted by `check(request, { audit: true })` only. */
+  | "policy.evaluated"
   | "tool.allowed"
   | "tool.denied"
   | "approval.requested"
@@ -249,13 +251,25 @@ export interface GuardOptions<TTools extends ToolMap = ToolMap, TContext = unkno
   readonly approvalTimeoutMs?: number;
   /** Max time for an async policy function. Default 5 000 ms. */
   readonly policyTimeoutMs?: number;
+  /**
+   * Max time to wait for `onAudit`. A timeout counts as "not recorded" and is
+   * reported to `onAuditError`. Default 5 000 ms.
+   */
+  readonly auditTimeoutMs?: number;
+  /**
+   * Max number of values (objects, arrays and primitives) in one tool input.
+   * Larger inputs are denied as `invalid_request`. Bounds how long snapshotting
+   * can block the event loop. Default 100 000.
+   */
+  readonly maxInputNodes?: number;
   /** Receives structured audit events from `execute()`. */
   readonly onAudit?: AuditHandler;
   /** Called when `onAudit` throws or rejects. Defaults to `console.error`. */
   readonly onAuditError?: (error: unknown, event: AuditEvent) => void;
   /**
-   * When `true`, a failure to record `tool.allowed` / `approval.granted`
-   * blocks execution (fail closed). Default `false`.
+   * When `true`, a failure (or timeout) recording `tool.allowed` /
+   * `approval.granted` blocks execution (fail closed). Requires `onAudit`.
+   * Default `false`.
    */
   readonly requireAudit?: boolean;
   /** Include tool input in audit events. Default `false` (input is never logged). */
@@ -264,13 +278,20 @@ export interface GuardOptions<TTools extends ToolMap = ToolMap, TContext = unkno
   readonly generateRequestId?: () => string;
 }
 
+export interface CheckOptions {
+  /** Emit a `policy.evaluated` audit event. Default `false`. */
+  readonly audit?: boolean;
+}
+
 export interface Guard<TTools extends ToolMap = ToolMap, TContext = unknown> {
   /**
-   * Evaluates policy only. Never calls the approval callback, never emits
-   * audit events, never executes anything. A `require_approval` result means
-   * approval is *needed*, not granted.
+   * Evaluates policy only. Never calls the approval callback and never
+   * executes anything. A `require_approval` result means approval is
+   * *needed*, not granted. Emits no audit event unless `{ audit: true }` is
+   * passed, for integrations whose only hook is a check (framework approval
+   * callbacks); then a `policy.evaluated` event is emitted.
    */
-  check(request: GuardRequest<TTools, TContext>): Promise<PolicyResult>;
+  check(request: GuardRequest<TTools, TContext>, options?: CheckOptions): Promise<PolicyResult>;
 
   /**
    * Evaluates policy, obtains approval if required, then calls `handler`
