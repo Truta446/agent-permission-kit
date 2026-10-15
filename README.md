@@ -67,6 +67,7 @@ agent-permission-kit is that layer, and nothing more.
 - **Replay protection:** a tool-call id that has already been processed is refused.
 - **Typed tool maps:** typos in tool names and input fields are compile errors.
 - **MCP adapter:** guard every tool on an `McpServer` (SDK v1 or v2) with one call.
+- **Policy tests:** pin a `[tool, input, decision]` table in CI with `expectDecisions()`.
 - Zero dependencies, ESM + CJS, Node ≥ 22.
 
 ## Install
@@ -206,18 +207,20 @@ createGuard({
   onAudit: (event) => logger.info(event),
   auditInput: false,   // default; true = include input with sensitive keys redacted; or (input, tool) => custom
   requireAudit: false, // true = if `tool.allowed` / `approval.granted` cannot be recorded, do not execute
+  auditTimeoutMs: 5_000, // a hung logger can't hang the tool call; a timeout counts as "not recorded"
 });
 ```
 
 | `type` | When |
 |---|---|
+| `policy.evaluated` | only from `check(request, { audit: true })`, for check-only integrations |
 | `tool.allowed` | policy allowed the call |
 | `tool.denied` | policy denied it, or the request was invalid, duplicate or aborted |
 | `approval.requested` | the approval callback is about to be called |
 | `approval.granted` / `approval.rejected` | approval outcome (`code` says why it was not granted) |
 | `execution.succeeded` / `execution.failed` | handler finished or threw (`errorName` only, never the message) |
 
-Every event carries `timestamp`, `requestId`, `tool`, `decision`, `reason` and `ruleId`. Events are frozen and the handler's return value is ignored, so audit code cannot change a decision. Audit failures go to `onAuditError` (default `console.error`) and are never swallowed silently. `check()` emits no events.
+Every event carries `timestamp`, `requestId`, `tool`, `decision`, `reason` and `ruleId`. Events are frozen and the handler's return value is ignored, so audit code cannot change a decision. Audit failures and timeouts go to `onAuditError` (default `console.error`) and are never swallowed silently. `check()` emits no events unless you pass `{ audit: true }`.
 
 ## MCP integration
 
@@ -260,12 +263,15 @@ To wrap tools one at a time instead, use `guardToolHandler(guard, "notes.read", 
 1. Unknown tools are denied, and `"allow"` can't be set as the default.
 2. A missing, throwing, timed-out, aborted or invalid approval never grants access.
 3. A throwing, rejecting, timed-out or malformed policy result denies.
-4. The handler gets the frozen snapshot that was evaluated and approved. Changes to the caller's object after the check have no effect.
-5. Tool names can't hit inherited properties (`constructor`, `__proto__`). Every security-relevant field is read as an own property, so a polluted `Object.prototype` can't supply `approved: true` or an approval callback.
-6. Audit handlers can't change decisions. With `requireAudit`, an unrecorded allow blocks execution.
+4. The handler gets the frozen snapshot that was evaluated and approved. Changes to the caller's object after the check have no effect, and each property is read exactly once (getters and Proxies can't show the policy one value and the handler another).
+5. Tool names can't hit inherited properties (`constructor`, `__proto__`). Every security-relevant field the guard reads is an own property, so a polluted `Object.prototype` can't supply `approved: true`, a decision, an approval callback or a request field. Inputs containing a `__proto__` key are rejected.
+6. Audit handlers can't change decisions, and a hung handler times out. With `requireAudit`, an unrecorded allow blocks execution.
 7. Raw inputs, contexts and error messages are not logged by default.
 8. Concurrent calls share no authorization state except the per-guard set of seen request ids.
 9. The rule table is copied at creation; mutating it later has no effect.
+10. Inputs are bounded (`maxInputNodes`, default 100 000 values; depth 64), so one call can't block the event loop for long.
+11. Hostile request objects (throwing getters, forged `AbortSignal`s, control characters in `requestId`) resolve to `invalid_request` instead of throwing.
+12. With `guardMcpServer`, tools registered through any other path (`server.tool()`, v1 `experimental.tasks.registerToolTask`, direct internal calls) are refused, and a pre-wrapped handler is always re-bound to the name it is registered under.
 
 **Not guaranteed (non-goals):**
 
@@ -273,7 +279,9 @@ To wrap tools one at a time instead, use `guardToolHandler(guard, "notes.read", 
 - **No protection for direct calls** that bypass `execute()` or the MCP adapter.
 - **No identity:** you authenticate users and approvers and pass them in `context`.
 - **No prompt-injection detection.** Policies see arguments; they don't judge intent.
-- **Replay protection is in-memory and per guard.** It covers the last 10 000 caller-supplied ids and resets on restart.
+- **Replay protection is in-memory and per guard.** It covers the last 10 000 caller-supplied ids and resets on restart. `requestId` is asserted by the caller: don't treat it as proof of identity in your audit trail.
+- **Policies must handle missing fields themselves.** If `Object.prototype` is polluted, reading an *absent* input field (`input.dryRun`) can return the polluted value. Use `Object.hasOwn(input, "dryRun")` or explicit comparisons for optional fields that grant access.
+- **MCP SDK v2 `registeredTool.executor`:** assigning to it directly (instead of `update({ callback })`) is not intercepted, because the SDK reassigns that field itself.
 - **Key-based redaction is best-effort.** Secrets in free-text fields are not detected.
 - **A running handler is never cancelled.** It only receives the caller's `signal`.
 
@@ -284,11 +292,12 @@ See [SECURITY.md](SECURITY.md) for how to report vulnerabilities, and [docs/arch
 | Export | Description |
 |---|---|
 | `createGuard<Tools?, Context?>(options)` | Creates a frozen guard. Throws `GuardConfigError` on invalid config. |
-| `guard.check(request)` | Returns `Promise<PolicyResult>`. Evaluates policy only. |
+| `guard.check(request, { audit? })` | Returns `Promise<PolicyResult>`. Evaluates policy only. |
 | `guard.execute(request, handler)` | Returns `Promise<ExecuteResult<T>>`. Authorizes, then calls `handler(input, ctx)` at most once. |
 | `redactInput(value)` / `REDACTED` | The built-in key redactor, for composing your own `auditInput` function. |
 | `guardMcpServer(server, guard, opts?)` | From `agent-permission-kit/mcp`. Guards every tool registered afterwards. |
 | `guardToolHandler(guard, name, handler, opts?)` | From `agent-permission-kit/mcp`. Guards one MCP handler. |
+| `expectDecisions(guard, cases)` | From `agent-permission-kit/testing`. Pins a `[tool, input, decision, context?]` table in CI. |
 
 **Request:** `{ tool, input?, context?, requestId?, signal? }`
 
@@ -301,6 +310,8 @@ See [SECURITY.md](SECURITY.md) for how to report vulnerabilities, and [docs/arch
 | `onApprovalRequired` | none (approval-required calls are refused) |
 | `approvalTimeoutMs` | 300 000 |
 | `policyTimeoutMs` | 5 000 |
+| `auditTimeoutMs` | 5 000 |
+| `maxInputNodes` | 100 000 |
 | `onAudit` | none |
 | `onAuditError` | `console.error` |
 | `requireAudit` | `false` |
@@ -312,6 +323,26 @@ See [SECURITY.md](SECURITY.md) for how to report vulnerabilities, and [docs/arch
 - `{ ok: true, value, decision, ruleId, tool, requestId, approval? }`
 - `{ ok: false, code, reason, decision, ruleId, tool, requestId }`, where `code` is one of: `policy_denied`, `invalid_request`, `policy_error`, `duplicate_request`, `approval_unavailable`, `approval_rejected`, `approval_invalid`, `approval_error`, `approval_timeout`, `aborted`, `audit_failed`
 
+## Performance
+
+Measured with [`bench/index.ts`](bench/index.ts) (`pnpm bench`) on Node 24, Intel Core Ultra 9 275HX. These are orders of magnitude; run it on your own hardware.
+
+| Operation | Mean |
+|---|---|
+| `check()`, static or wildcard rule | ~1–2 µs |
+| `execute()`, small input | ~5 µs |
+| `execute()`, ~10 KB input | ~35 µs |
+| `execute()`, ~250 KB input | ~2.5 ms (linear in input size, about the same as `structuredClone`) |
+| MCP `tools/call` round trip, added by `guardMcpServer` | ~+15–20 µs |
+
+For typical tool calls the guard costs microseconds, next to milliseconds for the tool itself. Snapshot cost grows with input size, which is why inputs are capped by `maxInputNodes`.
+
+## More
+
+- [Recipes](docs/recipes.md): role-based rules, read-only mode, spend caps, preview-then-confirm for stateless servers, Slack approval, pinning policy in CI
+- [Security review](docs/security-review.md): findings from the pre-release adversarial review and how each was handled
+- [Architecture](docs/architecture.md)
+
 ## Development
 
 ```sh
@@ -321,6 +352,7 @@ pnpm typecheck     # tsc (also enforces the type-level tests)
 pnpm lint          # biome
 pnpm build         # tsdown → dist/ (ESM + CJS + .d.ts)
 pnpm examples      # runs every example against the built package
+pnpm bench         # overhead benchmark
 ```
 
 ## Contributing

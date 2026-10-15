@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-10-15
 
 ### Added
 
@@ -20,3 +20,18 @@ All notable changes to this project are documented here. The format follows
 - Structured audit events, optional input logging with key redaction, and `requireAudit`.
 - MCP adapter (`agent-permission-kit/mcp`): `guardMcpServer()` and
   `guardToolHandler()` for the official TypeScript SDK v1 and v2.
+- `check(request, { audit: true })` emits `policy.evaluated` for check-only integrations.
+- `agent-permission-kit/testing`: `expectDecisions()` pins a decision table in CI.
+- `maxInputNodes` (default 100 000) and `auditTimeoutMs` (default 5 s) options.
+- Docs: recipes (including preview-then-confirm for stateless servers), performance numbers, pre-release security review.
+
+### Security
+
+Hardening from the pre-release adversarial review (see `docs/security-review.md`):
+
+- MCP: v1 `experimental.tasks.registerToolTask` is disabled and any registration path that skips the guard is refused. Pre-wrapped handlers are re-bound to their registered name.
+- Inputs with a `__proto__` key or more than `maxInputNodes` values are rejected.
+- `requestId` must be printable ASCII.
+- `requireAudit` requires `onAudit`, and a hung audit handler times out.
+- Wider redaction of credential-like keys and URL credentials.
+- Hostile request objects resolve to `invalid_request` instead of throwing.
