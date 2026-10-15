@@ -5,6 +5,7 @@
  */
 import { Client as ClientV2, InMemoryTransport as InMemoryV2 } from "@modelcontextprotocol/client";
 import { Client as ClientV1 } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/index.js";
 import { InMemoryTransport as InMemoryV1 } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer as McpServerV1 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpServer as McpServerV2 } from "@modelcontextprotocol/server";
@@ -321,18 +322,6 @@ describe("MCP v1-specific bypass paths", () => {
     expect(() => server.tool("x", async () => ({ content: [] }))).toThrow(/disabled/);
   });
 
-  it("experimental registerToolTask is disabled (it would register an unguarded task tool)", () => {
-    const server = new McpServerV1({ name: "t", version: "1" });
-    guardMcpServer(server, createGuard({ rules: { "db.drop": "deny" } }));
-    expect(() =>
-      server.experimental.tasks.registerToolTask(
-        "db.drop",
-        { execution: { taskSupport: "optional" } } as never,
-        { createTask: async () => ({}) } as never,
-      ),
-    ).toThrow(/disabled by guardMcpServer/);
-  });
-
   it("non-function handlers are refused instead of registered unguarded", () => {
     const server = new McpServerV1({ name: "t", version: "1" });
     guardMcpServer(server, createGuard({ rules: {} }));
@@ -371,5 +360,132 @@ describe("guardToolHandler used on its own", () => {
     await callNoArgs(handler);
     expect(approver).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("MCP v1 task-based tools (#14)", () => {
+  type TaskExtra = {
+    taskStore: {
+      createTask(o: { ttl: number }): Promise<{ taskId: string }>;
+      storeTaskResult(id: string, status: "completed", result: unknown): Promise<void>;
+      getTask(id: string): Promise<unknown>;
+      getTaskResult(id: string): Promise<unknown>;
+    };
+    taskId: string;
+  };
+
+  function taskHandler(createSpy = vi.fn()) {
+    return {
+      createSpy,
+      handler: {
+        createTask: async (args: { amount: number }, extra: TaskExtra) => {
+          createSpy(args);
+          const task = await extra.taskStore.createTask({ ttl: 60_000 });
+          await extra.taskStore.storeTaskResult(task.taskId, "completed", {
+            content: [{ type: "text", text: `refunded ${args.amount}` }],
+          });
+          return { task };
+        },
+        getTask: async (_args: unknown, extra: TaskExtra) => extra.taskStore.getTask(extra.taskId),
+        getTaskResult: async (_args: unknown, extra: TaskExtra) =>
+          extra.taskStore.getTaskResult(extra.taskId),
+      },
+    };
+  }
+
+  async function setup(rules: Parameters<typeof createGuard>[0]["rules"]) {
+    const server = new McpServerV1({ name: "t", version: "1" }, {
+      taskStore: new InMemoryTaskStore(),
+    } as never);
+    guardMcpServer(server, createGuard({ rules }));
+    const [clientT, serverT] = InMemoryV1.createLinkedPair();
+    const client = new ClientV1({ name: "c", version: "1" });
+    return {
+      server,
+      connect: async () => {
+        await Promise.all([server.connect(serverT), client.connect(clientT)]);
+        return client;
+      },
+    };
+  }
+
+  const register = (server: McpServerV1, name: string, handler: unknown) =>
+    server.experimental.tasks.registerToolTask(
+      name,
+      { inputSchema: { amount: z.number() }, execution: { taskSupport: "optional" } } as never,
+      handler as never,
+    );
+
+  it("an allowed task tool runs and receives the frozen authorized arguments", async () => {
+    const { server, connect } = await setup({
+      refund: ({ input }) => ((input as { amount: number }).amount < 50 ? "allow" : "deny"),
+    });
+    const { handler, createSpy } = taskHandler();
+    register(server, "refund", handler);
+    const client = await connect();
+    const result = (await client.callTool({
+      name: "refund",
+      arguments: { amount: 10 },
+    })) as CallResult;
+    expect(text(result)).toBe("refunded 10");
+    expect(createSpy).toHaveBeenCalledWith({ amount: 10 });
+    expect(Object.isFrozen(createSpy.mock.calls[0]?.[0])).toBe(true);
+  });
+
+  it("a denied task tool never creates a task and returns an error result", async () => {
+    const { server, connect } = await setup({
+      refund: ({ input }) => ((input as { amount: number }).amount < 50 ? "allow" : "deny"),
+    });
+    const { handler, createSpy } = taskHandler();
+    register(server, "refund", handler);
+    const client = await connect();
+    const result = (await client.callTool({
+      name: "refund",
+      arguments: { amount: 500 },
+    })) as CallResult;
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Tool call "refund" was not executed: Denied by policy');
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("task tools without a rule are denied by default", async () => {
+    const { server, connect } = await setup({});
+    const { handler, createSpy } = taskHandler();
+    register(server, "anything", handler);
+    const client = await connect();
+    expect(
+      ((await client.callTool({ name: "anything", arguments: { amount: 1 } })) as CallResult)
+        .isError,
+    ).toBe(true);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("update({ callback }) with a new task handler stays guarded", async () => {
+    const { server, connect } = await setup({ refund: "deny" });
+    const registered = register(server, "refund", taskHandler().handler);
+    const replacement = taskHandler();
+    registered.update({ callback: replacement.handler as never });
+    const client = await connect();
+    expect(
+      ((await client.callTool({ name: "refund", arguments: { amount: 1 } })) as CallResult).isError,
+    ).toBe(true);
+    expect(replacement.createSpy).not.toHaveBeenCalled();
+  });
+
+  it("update({ callback }) with an allowed rule really switches to the new task handler", async () => {
+    const { server, connect } = await setup({ refund: "allow" });
+    const original = taskHandler();
+    const registered = register(server, "refund", original.handler);
+    const replacement = taskHandler();
+    registered.update({ callback: replacement.handler as never });
+    const client = await connect();
+    await client.callTool({ name: "refund", arguments: { amount: 1 } });
+    expect(replacement.createSpy).toHaveBeenCalledTimes(1);
+    expect(original.createSpy).not.toHaveBeenCalled();
+  });
+
+  it("malformed task handlers are refused", async () => {
+    const { server } = await setup({});
+    expect(() => register(server, "x", { createTask: async () => ({}) })).toThrow(TypeError);
   });
 });

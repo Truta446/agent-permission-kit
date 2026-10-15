@@ -149,6 +149,98 @@ export function guardToolHandler<H extends (...args: never[]) => unknown>(
   return wrapped as unknown as H;
 }
 
+/** v1 task-based tool handler (`server.experimental.tasks.registerToolTask`). */
+export interface McpTaskHandlerLike {
+  createTask: (...args: never[]) => unknown;
+  getTask: (...args: never[]) => unknown;
+  getTaskResult: (...args: never[]) => unknown;
+}
+
+interface GuardedTaskHandler extends McpTaskHandlerLike {
+  [GUARDED]?: Guard<ToolMap, unknown>;
+  [RAW]?: McpTaskHandlerLike;
+  [BOUND_NAME]?: string;
+}
+
+function isTaskHandler(value: unknown): value is GuardedTaskHandler {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as McpTaskHandlerLike).createTask === "function" &&
+    typeof (value as McpTaskHandlerLike).getTask === "function" &&
+    typeof (value as McpTaskHandlerLike).getTaskResult === "function"
+  );
+}
+
+function unwrapTask(handler: GuardedTaskHandler, guard: unknown): McpTaskHandlerLike {
+  let current = handler;
+  while (current[GUARDED] === guard && isTaskHandler(current[RAW])) current = current[RAW];
+  return current;
+}
+
+/**
+ * Wraps a v1 task-based tool handler. Authorization happens in `createTask`,
+ * where the work starts; `getTask` / `getTaskResult` only read a task that was
+ * created, so authorized, earlier. A refused `createTask` throws, which the
+ * SDK turns into an `isError` tool result carrying the reason (`onDenied`
+ * does not apply: a task call can't return a plain result).
+ */
+export function guardTaskHandler<T extends McpTaskHandlerLike>(
+  // biome-ignore lint/suspicious/noExplicitAny: accepts a guard of any tool map.
+  guard: Guard<any, any>,
+  toolName: string,
+  handler: T,
+  options: Pick<McpGuardOptions, "context"> = {},
+): T {
+  if (!isTaskHandler(handler)) {
+    throw new TypeError(
+      "guardTaskHandler() requires { createTask, getTask, getTaskResult } functions",
+    );
+  }
+  const existing = handler as GuardedTaskHandler;
+  if (existing[GUARDED] === guard && existing[BOUND_NAME] === toolName) return handler;
+  const raw = unwrapTask(existing, guard);
+  const toContext = options.context;
+
+  const wrapped: GuardedTaskHandler = {
+    // Same arity convention as tool handlers: (args, extra) or (extra).
+    createTask: (async (...args: unknown[]) => {
+      const hasInput = args.length >= 2;
+      const input = hasInput ? args[0] : undefined;
+      const extra = hasInput ? args[1] : args[0];
+      const signal = signalFrom(extra);
+      const context = toContext ? toContext((extra ?? {}) as McpHandlerExtra) : undefined;
+      const call = raw.createTask as (...a: unknown[]) => unknown;
+      const result = await guard.execute(
+        {
+          tool: toolName,
+          input,
+          ...(context !== undefined && { context }),
+          ...(signal !== undefined && { signal }),
+        },
+        (authorized: unknown) =>
+          hasInput ? call.call(raw, authorized, extra) : call.call(raw, extra),
+      );
+      if (result.ok) return result.value;
+      throw new Error(`Tool call "${toolName}" was not executed: ${result.reason}`);
+    }) as McpTaskHandlerLike["createTask"],
+    getTask: ((...args: unknown[]) =>
+      (raw.getTask as (...a: unknown[]) => unknown).apply(
+        raw,
+        args,
+      )) as McpTaskHandlerLike["getTask"],
+    getTaskResult: ((...args: unknown[]) =>
+      (raw.getTaskResult as (...a: unknown[]) => unknown).apply(
+        raw,
+        args,
+      )) as McpTaskHandlerLike["getTaskResult"],
+  };
+  wrapped[GUARDED] = guard;
+  wrapped[RAW] = raw;
+  wrapped[BOUND_NAME] = toolName;
+  return wrapped as T;
+}
+
 /** Structural view of `McpServer` used by `guardMcpServer`. */
 export interface GuardableMcpServer {
   // biome-ignore lint/suspicious/noExplicitAny: must accept every SDK overload.
@@ -159,15 +251,18 @@ export interface GuardableMcpServer {
 
 const SERVER_GUARDED = Symbol.for("agent-permission-kit.mcp.server-guarded");
 
+type RawHandler = AnyHandler | McpTaskHandlerLike;
+
 /**
  * Makes every tool registered on `server` *after this call* go through `guard`,
  * under the name it is registered with. Tools without a rule fall back to the
  * guard's default decision (deny unless configured otherwise).
  *
- * Also covers `registeredTool.update({ callback, name })` (the new handler is
- * wrapped; a rename re-binds the policy to the new name), and disables the
- * deprecated v1 `server.tool()` method, which would otherwise register an
- * unguarded handler.
+ * Covers `registerTool`, v1 task tools (`experimental.tasks.registerToolTask`),
+ * `registeredTool.update({ callback, name })` (the new handler is wrapped; a
+ * rename re-binds the policy to the new name) and v1's `registeredTool.handler`
+ * assignment. Disables the deprecated v1 `server.tool()`, and refuses any other
+ * path that would register an unguarded handler.
  *
  * Call it right after constructing the server, before registering tools.
  */
@@ -188,61 +283,88 @@ export function guardMcpServer<S extends GuardableMcpServer>(
     );
   }
 
-  const originalRegister = server.registerTool.bind(server);
-  server.registerTool = (name: unknown, config: unknown, cb: unknown, ...rest: unknown[]) => {
-    if (typeof name !== "string" || typeof cb !== "function") {
-      // Fail closed rather than register something we cannot wrap
-      // (e.g. experimental task handlers, which are objects).
-      throw new TypeError(
-        "guardMcpServer(): registerTool(name, config, handler) requires a string name and a handler function",
-      );
-    }
+  /** The application's own handler, with this guard's wrappers stripped. */
+  const rawOf = (handler: unknown): RawHandler => {
+    if (typeof handler === "function") return unwrap(handler as AnyHandler, guard);
+    if (isTaskHandler(handler)) return unwrapTask(handler, guard);
+    throw new TypeError("guardMcpServer(): a tool handler must be a function or a task handler");
+  };
+  const wrap = (name: string, raw: RawHandler): RawHandler =>
+    typeof raw === "function"
+      ? guardToolHandler(guard, name, raw, options)
+      : guardTaskHandler(guard, name, raw, options);
+
+  /** Keeps the guard bound through update() and (v1) handler assignment. */
+  const protect = (registered: unknown, name: string, raw: RawHandler) => {
+    const tool = registered as
+      | { update?: (updates: Record<string, unknown>) => unknown; handler?: unknown }
+      | undefined;
+    if (!tool) return;
     let currentName = name;
-    let currentRaw = unwrap(cb as AnyHandler, guard);
-    const registered = originalRegister(
-      name,
-      config,
-      guardToolHandler(guard, name, currentRaw, options),
-      ...rest,
-    ) as { update?: (updates: Record<string, unknown>) => unknown; handler?: unknown } | undefined;
+    let currentRaw = raw;
 
     // v1 reads `registeredTool.handler` on every call, so assigning to it
     // directly would install an unguarded handler. Wrap on assignment.
-    if (registered && Object.hasOwn(registered, "handler")) {
-      let current = registered.handler;
-      Object.defineProperty(registered, "handler", {
+    if (Object.hasOwn(tool, "handler")) {
+      let current = tool.handler;
+      Object.defineProperty(tool, "handler", {
         get: () => current,
         set: (next: unknown) => {
-          if (typeof next !== "function") {
-            throw new TypeError("guardMcpServer(): tool handler must be a function");
-          }
-          currentRaw = unwrap(next as AnyHandler, guard);
-          current = guardToolHandler(guard, currentName, currentRaw, options);
+          currentRaw = rawOf(next);
+          current = wrap(currentName, currentRaw);
         },
         enumerable: true,
         configurable: false,
       });
     }
 
-    const originalUpdate = registered?.update;
-    if (registered && typeof originalUpdate === "function") {
-      registered.update = (updates: Record<string, unknown>) => {
+    const originalUpdate = tool.update;
+    if (typeof originalUpdate === "function") {
+      tool.update = (updates: Record<string, unknown>) => {
         const next = { ...updates };
         const renamed = typeof next.name === "string" && next.name !== currentName;
-        if (typeof next.callback === "function")
-          currentRaw = unwrap(next.callback as AnyHandler, guard);
+        if (next.callback !== undefined) currentRaw = rawOf(next.callback);
         if (renamed) currentName = next.name as string;
-        if (typeof next.callback === "function" || renamed) {
-          next.callback = guardToolHandler(guard, currentName, currentRaw, options);
-        }
-        return originalUpdate.call(registered, next);
+        if (next.callback !== undefined || renamed) next.callback = wrap(currentName, currentRaw);
+        return originalUpdate.call(tool, next);
       };
     }
+  };
+
+  const originalRegister = server.registerTool.bind(server);
+  server.registerTool = (name: unknown, config: unknown, cb: unknown, ...rest: unknown[]) => {
+    if (typeof name !== "string" || typeof cb !== "function") {
+      // Fail closed rather than register something we cannot wrap.
+      throw new TypeError(
+        "guardMcpServer(): registerTool(name, config, handler) requires a string name and a handler function",
+      );
+    }
+    const raw = rawOf(cb);
+    const registered = originalRegister(name, config, wrap(name, raw), ...rest);
+    protect(registered, name, raw);
     return registered;
   };
 
-  // Every registration path in SDK v1 and v2 (registerTool, the deprecated
-  // tool(), v1's experimental registerToolTask) ends in `_createRegisteredTool`
+  const tasks = (server as unknown as { experimental?: { tasks?: { registerToolTask?: unknown } } })
+    .experimental?.tasks;
+  if (tasks && typeof tasks.registerToolTask === "function") {
+    const originalRegisterTask = (tasks.registerToolTask as (...args: unknown[]) => unknown).bind(
+      tasks,
+    );
+    tasks.registerToolTask = (name: unknown, config: unknown, handler: unknown) => {
+      if (typeof name !== "string" || !isTaskHandler(handler)) {
+        throw new TypeError(
+          "guardMcpServer(): registerToolTask(name, config, handler) requires a string name and { createTask, getTask, getTaskResult }",
+        );
+      }
+      const raw = rawOf(handler);
+      const registered = originalRegisterTask(name, config, wrap(name, raw));
+      protect(registered, name, raw);
+      return registered;
+    };
+  }
+
+  // Every registration path in SDK v1 and v2 ends in `_createRegisteredTool`
   // with the handler as its last argument. Refuse anything that reaches it
   // without having been wrapped above, so a path we don't know about fails
   // closed instead of registering an unguarded tool.
@@ -250,23 +372,15 @@ export function guardMcpServer<S extends GuardableMcpServer>(
   if (typeof internal._createRegisteredTool === "function") {
     const originalCreate = internal._createRegisteredTool.bind(server);
     internal._createRegisteredTool = (...args: unknown[]) => {
-      const handler = args[args.length - 1] as GuardedHandler | undefined;
-      if (typeof handler !== "function" || handler[GUARDED] !== guard) {
+      const handler = args[args.length - 1] as { [GUARDED]?: unknown } | undefined;
+      const guarded =
+        (typeof handler === "function" || isTaskHandler(handler)) && handler?.[GUARDED] === guard;
+      if (!guarded) {
         throw new TypeError(
           "guardMcpServer(): blocked a tool registration that bypasses the guard; use server.registerTool()",
         );
       }
       return originalCreate(...args);
-    };
-  }
-
-  const tasks = (server as unknown as { experimental?: { tasks?: { registerToolTask?: unknown } } })
-    .experimental?.tasks;
-  if (tasks && typeof tasks.registerToolTask === "function") {
-    tasks.registerToolTask = () => {
-      throw new TypeError(
-        "server.experimental.tasks.registerToolTask() is disabled by guardMcpServer(): task-based tools cannot be guarded yet",
-      );
     };
   }
 

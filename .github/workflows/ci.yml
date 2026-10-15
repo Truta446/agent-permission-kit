@@ -30,3 +30,18 @@ jobs:
       - run: pnpm build
       - run: pnpm check:package
       - run: pnpm examples
+
+  # The oldest MCP SDK v1 + zod 3 pair still in wide use. The adapter imports
+  # neither, so this guards against SDK behavior changes, not our types.
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm add -D @modelcontextprotocol/sdk@1.30.0 zod@3.25.76
+      - run: pnpm exec vitest run tests/compat
