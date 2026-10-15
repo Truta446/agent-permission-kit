@@ -20,7 +20,10 @@
     "paths": {
       "agent-permission-kit": ["./src/index.ts"],
       "agent-permission-kit/mcp": ["./src/adapters/mcp.ts"],
-      "agent-permission-kit/testing": ["./src/testing.ts"]
+      "agent-permission-kit/testing": ["./src/testing.ts"],
+      "agent-permission-kit/ai-sdk": ["./src/adapters/ai-sdk.ts"],
+      "agent-permission-kit/openai-agents": ["./src/adapters/openai-agents.ts"],
+      "agent-permission-kit/claude-agent-sdk": ["./src/adapters/claude-agent-sdk.ts"]
     }
   },
   "include": ["src", "tests", "examples", "*.config.ts", "bench"]

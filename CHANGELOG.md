@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-15
+
+### Added
+
+- Framework adapters, none importing the framework at runtime:
+  - `agent-permission-kit/ai-sdk`: `toolApproval()` for the Vercel AI SDK (#2)
+  - `agent-permission-kit/claude-agent-sdk`: `preToolUseHook()` and `canUseTool()` (#3)
+  - `agent-permission-kit/openai-agents`: `guardTool()` and `needsApproval()` (#4)
+- MCP v1 task tools (`experimental.tasks.registerToolTask`) are now guarded at
+  `createTask` instead of refused; `guardTaskHandler()` (#14).
+- `replayStore` option: replay protection shared across processes; a failing
+  store denies with `replay_check_failed` (#7).
+- `nullPrototypeInput` option (#15).
+- Audit redaction now also catches secret-shaped values (JWTs, `Bearer`
+  tokens, common provider key prefixes) and `{ name, value }` pairs (#16).
+- CI job testing the MCP adapter against `@modelcontextprotocol/sdk` 1.30 with zod 3.25 (#8).
+
+### Fixed
+
+- Audit redaction of credentials in URLs no longer runs in quadratic time on
+  long words (found by the new linear-time test).
+
 ## [0.1.1] - 2026-10-15
 
 ### Fixed

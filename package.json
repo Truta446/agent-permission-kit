@@ -1,6 +1,6 @@
 {
   "name": "agent-permission-kit",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Give your AI agents permissions, not unlimited access. Allow, deny, or require human approval for every tool call — in-process, typed, fail-closed.",
   "keywords": [
     "ai",
@@ -16,7 +16,10 @@
     "mcp",
     "model-context-protocol",
     "security",
-    "audit"
+    "audit",
+    "vercel-ai-sdk",
+    "openai-agents",
+    "claude-agent-sdk"
   ],
   "license": "MIT",
   "author": "Juan Versolato <juan.versolato@outlook.com>",
@@ -74,6 +77,36 @@
         "default": "./dist/testing.cjs"
       }
     },
+    "./ai-sdk": {
+      "import": {
+        "types": "./dist/ai-sdk.d.ts",
+        "default": "./dist/ai-sdk.js"
+      },
+      "require": {
+        "types": "./dist/ai-sdk.d.cts",
+        "default": "./dist/ai-sdk.cjs"
+      }
+    },
+    "./openai-agents": {
+      "import": {
+        "types": "./dist/openai-agents.d.ts",
+        "default": "./dist/openai-agents.js"
+      },
+      "require": {
+        "types": "./dist/openai-agents.d.cts",
+        "default": "./dist/openai-agents.cjs"
+      }
+    },
+    "./claude-agent-sdk": {
+      "import": {
+        "types": "./dist/claude-agent-sdk.d.ts",
+        "default": "./dist/claude-agent-sdk.js"
+      },
+      "require": {
+        "types": "./dist/claude-agent-sdk.d.cts",
+        "default": "./dist/claude-agent-sdk.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -83,6 +116,15 @@
       ],
       "testing": [
         "./dist/testing.d.cts"
+      ],
+      "ai-sdk": [
+        "./dist/ai-sdk.d.cts"
+      ],
+      "openai-agents": [
+        "./dist/openai-agents.d.cts"
+      ],
+      "claude-agent-sdk": [
+        "./dist/claude-agent-sdk.d.cts"
       ]
     }
   },
@@ -101,13 +143,16 @@
   },
   "packageManager": "pnpm@10.4.0",
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "~0.3.300",
     "@arethetypeswrong/cli": "~0.18.5",
     "@biomejs/biome": "2.5.14",
     "@modelcontextprotocol/client": "~2.3.1",
     "@modelcontextprotocol/sdk": "~1.32.1",
     "@modelcontextprotocol/server": "~2.3.1",
+    "@openai/agents": "~0.20.0",
     "@types/node": "^24",
     "@vitest/coverage-v8": "~5.0.4",
+    "ai": "~7.0.141",
     "publint": "~0.3.25",
     "tinybench": "~6.2.2",
     "tsdown": "~0.23.1",

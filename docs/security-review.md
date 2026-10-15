@@ -10,15 +10,15 @@ is reverted, and every fix was checked by reverting it and watching a test fail.
 
 | # | Severity | Finding | Status |
 |---|---|---|---|
-| 1 | High | MCP SDK v1 `server.experimental.tasks.registerToolTask()` registered a tool without going through `registerTool`, so `guardMcpServer` never wrapped it | **Fixed.** The method is disabled, and every registration reaching the SDK's internal `_createRegisteredTool` must carry a handler wrapped by this guard, so unknown paths fail closed |
+| 1 | High | MCP SDK v1 `server.experimental.tasks.registerToolTask()` registered a tool without going through `registerTool`, so `guardMcpServer` never wrapped it | **Fixed.** Every registration reaching the SDK's internal `_createRegisteredTool` must carry a handler wrapped by this guard, so unknown paths fail closed. Since 0.2.0, task tools are guarded at `createTask` instead of disabled |
 | 2 | Medium | A handler pre-wrapped with `guardToolHandler` kept its old policy name after `update({ name })` | **Fixed.** Wrappers remember the original handler; `guardMcpServer` always re-binds it to the registered name |
 | 3 | Low | `guardMcpServer` trusted the name of a pre-wrapped handler (copy-paste mistake) | **Fixed** (same change as #2) |
 | 4 | Low | SDK v2: assigning `registeredTool.executor` directly installs an unguarded handler | **Documented.** The SDK reassigns this field itself during `update()`, so it can't be blocked without breaking updates. App code must use `update({ callback })` |
 | 5 | Low | `requireAudit: true` without `onAudit` recorded nothing yet executed | **Fixed.** Configuration error |
 | 6 | Low | A hung `onAudit` hung `execute()` forever | **Fixed.** `auditTimeoutMs` (default 5 s); a timeout counts as "not recorded" |
-| 7 | Low | With a polluted `Object.prototype`, a policy reading an *absent* input field sees the polluted value | **Documented**, with guidance to use `Object.hasOwn` for optional fields that grant access |
+| 7 | Low | With a polluted `Object.prototype`, a policy reading an *absent* input field sees the polluted value | **Documented**, with guidance to use `Object.hasOwn` for optional fields that grant access. Since 0.2.0, `nullPrototypeInput: true` removes the risk |
 | 8 | Low | `requestId` is caller-asserted and can collide with generated ids in the audit trail | **Documented** |
-| 9 | Low | Redaction missed `accessKey`, `otp`, `jwt`, `bearer`, `mnemonic`, `pinCode`, credentials inside URLs, and more | **Fixed.** Wider key list plus `scheme://user:pass@` redaction in string values. Still best-effort |
+| 9 | Low | Redaction missed `accessKey`, `otp`, `jwt`, `bearer`, `mnemonic`, `pinCode`, credentials inside URLs, and more | **Fixed.** Wider key list plus `scheme://user:pass@` redaction in string values; since 0.2.0 also secret-shaped values and `{ name, value }` pairs. Still best-effort |
 | 10 | Info | `requestId` accepted newlines and escape codes (log-line forging) | **Fixed.** Printable ASCII only |
 | 11 | Info | An own `__proto__` key in input could smuggle fields past a policy when a handler later used `Object.assign` | **Fixed.** Rejected as `invalid_request` |
 | 12 | Info | A throwing getter on `request.tool` or a forged `AbortSignal` made `execute()` reject instead of resolving `ok: false` | **Fixed** |

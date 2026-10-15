@@ -67,7 +67,8 @@ agent-permission-kit is that layer, and nothing more.
 - **Audit events**, structured. Inputs are not logged by default; opt-in logging redacts sensitive keys.
 - **Replay protection:** a tool-call id that has already been processed is refused.
 - **Typed tool maps:** typos in tool names and input fields are compile errors.
-- **MCP adapter:** guard every tool on an `McpServer` (SDK v1 or v2) with one call.
+- **MCP adapter:** guard every tool on an `McpServer` (SDK v1 or v2, including v1 task tools) with one call.
+- **Framework adapters:** the same rules through the native hooks of the Vercel AI SDK, OpenAI Agents JS and Claude Agent SDK.
 - **Policy tests:** pin a `[tool, input, decision]` table in CI with `expectDecisions()`.
 - Zero dependencies, ESM + CJS, Node ≥ 22.
 
@@ -257,6 +258,53 @@ Once `guardMcpServer()` has run:
 
 To wrap tools one at a time instead, use `guardToolHandler(guard, "notes.read", handler)`. A runnable server and client are in [`examples/mcp-server`](examples/mcp-server).
 
+## Framework adapters
+
+One rule set, enforced through each framework's own approval hook. None of
+them imports the framework at runtime.
+
+**Vercel AI SDK** (`toolApproval`):
+
+```ts
+import { toolApproval } from "agent-permission-kit/ai-sdk";
+
+await generateText({ model, tools, prompt, toolApproval: toolApproval(guard) });
+// allow → approved, deny → denied, require_approval → user-approval
+```
+
+**OpenAI Agents JS** (`needsApproval` + `execute`):
+
+```ts
+import { guardTool } from "agent-permission-kit/openai-agents";
+
+const refund = tool({
+  name: "payments_refund",
+  description: "Refund a payment",
+  parameters: z.object({ amount: z.number() }),
+  ...guardTool(guard, "payments_refund", async ({ amount }) => refunds.create(amount)),
+});
+// require_approval → SDK interruption; deny → execute refuses with the reason
+```
+
+**Claude Agent SDK** (`PreToolUse` hook + `canUseTool`):
+
+```ts
+import { canUseTool, preToolUseHook } from "agent-permission-kit/claude-agent-sdk";
+
+query({
+  prompt,
+  options: {
+    hooks: { PreToolUse: [{ hooks: [preToolUseHook(guard)] }] }, // default deny, before permission modes
+    canUseTool: canUseTool(guard), // approval + replay protection; returns the authorized input
+  },
+});
+```
+
+`toolApproval`, `needsApproval` and the `PreToolUse` hook only *decide*; the
+framework executes the tool, so the frozen-snapshot binding of `execute()`
+does not apply there. `canUseTool` does bind: it returns the authorized
+snapshot as `updatedInput`. Decisions are audited as `policy.evaluated`.
+
 ## Security model
 
 **Guaranteed, and covered by tests in [`tests/`](tests):**
@@ -272,7 +320,8 @@ To wrap tools one at a time instead, use `guardToolHandler(guard, "notes.read", 
 9. The rule table is copied at creation; mutating it later has no effect.
 10. Inputs are bounded (`maxInputNodes`, default 100 000 values; depth 64), so one call can't block the event loop for long.
 11. Hostile request objects (throwing getters, forged `AbortSignal`s, control characters in `requestId`) resolve to `invalid_request` instead of throwing.
-12. With `guardMcpServer`, tools registered through any other path (`server.tool()`, v1 `experimental.tasks.registerToolTask`, direct internal calls) are refused, and a pre-wrapped handler is always re-bound to the name it is registered under.
+12. With `guardMcpServer`, every registration path is guarded or refused: `registerTool`, v1 task tools (`experimental.tasks.registerToolTask`, authorized at `createTask`), `update()`, v1 `handler` assignment; the deprecated `server.tool()` and unknown internal paths are refused. A pre-wrapped handler is always re-bound to the name it is registered under.
+13. Replay protection can be shared across processes (`replayStore`); a failing store denies.
 
 **Not guaranteed (non-goals):**
 
@@ -281,7 +330,7 @@ To wrap tools one at a time instead, use `guardToolHandler(guard, "notes.read", 
 - **No identity:** you authenticate users and approvers and pass them in `context`.
 - **No prompt-injection detection.** Policies see arguments; they don't judge intent.
 - **Replay protection is in-memory and per guard.** It covers the last 10 000 caller-supplied ids and resets on restart. `requestId` is asserted by the caller: don't treat it as proof of identity in your audit trail.
-- **Policies must handle missing fields themselves.** If `Object.prototype` is polluted, reading an *absent* input field (`input.dryRun`) can return the polluted value. Use `Object.hasOwn(input, "dryRun")` or explicit comparisons for optional fields that grant access.
+- **Policies must handle missing fields themselves.** If `Object.prototype` is polluted, reading an *absent* input field (`input.dryRun`) can return the polluted value. Use `Object.hasOwn(input, "dryRun")`, explicit comparisons, or `nullPrototypeInput: true` for optional fields that grant access.
 - **MCP SDK v2 `registeredTool.executor`:** assigning to it directly (instead of `update({ callback })`) is not intercepted, because the SDK reassigns that field itself.
 - **Key-based redaction is best-effort.** Secrets in free-text fields are not detected.
 - **A running handler is never cancelled.** It only receives the caller's `signal`.
@@ -299,6 +348,10 @@ See [SECURITY.md](SECURITY.md) for how to report vulnerabilities, and [docs/arch
 | `guardMcpServer(server, guard, opts?)` | From `agent-permission-kit/mcp`. Guards every tool registered afterwards. |
 | `guardToolHandler(guard, name, handler, opts?)` | From `agent-permission-kit/mcp`. Guards one MCP handler. |
 | `expectDecisions(guard, cases)` | From `agent-permission-kit/testing`. Pins a `[tool, input, decision, context?]` table in CI. |
+| `guardTaskHandler(guard, name, handler)` | From `agent-permission-kit/mcp`. Guards one v1 task tool handler. |
+| `toolApproval(guard, opts?)` | From `agent-permission-kit/ai-sdk`. |
+| `guardTool(guard, name, execute, opts?)` / `needsApproval(...)` | From `agent-permission-kit/openai-agents`. |
+| `preToolUseHook(guard, opts?)` / `canUseTool(guard, opts?)` | From `agent-permission-kit/claude-agent-sdk`. |
 
 **Request:** `{ tool, input?, context?, requestId?, signal? }`
 
@@ -313,6 +366,8 @@ See [SECURITY.md](SECURITY.md) for how to report vulnerabilities, and [docs/arch
 | `policyTimeoutMs` | 5 000 |
 | `auditTimeoutMs` | 5 000 |
 | `maxInputNodes` | 100 000 |
+| `nullPrototypeInput` | `false` |
+| `replayStore` | in memory, per guard |
 | `onAudit` | none |
 | `onAuditError` | `console.error` |
 | `requireAudit` | `false` |
@@ -362,7 +417,7 @@ Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Security iss
 
 ## Roadmap
 
-Adapters for framework-native approval hooks are planned: Vercel AI SDK `toolApproval`, OpenAI Agents `needsApproval`, Claude Agent SDK `canUseTool`. See [ROADMAP.md](ROADMAP.md).
+Durable approvals for stateless servers (#6) and a supported tool-call hook upstream in the MCP SDK ([proposal](docs/proposals/mcp-tool-hooks.md)). See [ROADMAP.md](ROADMAP.md).
 
 ## License
 
