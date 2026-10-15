@@ -84,7 +84,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "check:package": "publint --strict && attw --pack . --profile node16",
+    "check:package": "publint --strict && env -u npm_config_dry_run attw --pack . --profile node16",
     "examples": "node examples/basic/index.ts && node examples/conditional-rules/index.ts && node examples/human-approval/index.ts && node examples/mcp-server/client.ts",
     "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run check:package",
     "bench": "pnpm build && node bench/index.ts"
