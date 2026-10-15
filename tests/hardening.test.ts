@@ -151,3 +151,58 @@ describe("hostile requests", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 });
+
+describe("value-based redaction (#16)", () => {
+  async function logged(input: unknown) {
+    const events: AuditEvent[] = [];
+    const guard = createGuard({
+      rules: { t: "allow" },
+      auditInput: true,
+      onAudit: (e) => void events.push(e),
+    });
+    await guard.execute({ tool: "t", input }, () => 1);
+    return JSON.stringify(events[0]?.input);
+  }
+
+  it.each([
+    [
+      "JWT",
+      "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U here",
+    ],
+    ["Bearer header pair", [["Authorization", "Bearer abcdefghijklmnop1234"]]],
+    ["OpenAI-style key", "use sk-proj-abcdefghijklmnopqrstuvwx please"],
+    ["Stripe key", "sk_live_51HabcdefghijklmnopQRS"],
+    ["GitHub token", "ghp_abcdefghijklmnopqrstuvwxyz0123456789"],
+    ["Slack token", "xoxb-1234567890-abcdefghij"],
+    ["AWS key id", "AKIAABCDEFGHIJKLMNOP"],
+    ["name/value pair", [{ name: "API_KEY", value: "plain-looking-secret" }]],
+    ["key/value pair", [{ key: "password", value: "hunter2" }]],
+  ])("redacts %s inside values", async (_label, input) => {
+    const out = await logged({ note: input });
+    expect(out).toContain(REDACTED);
+    for (const secret of [
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIi",
+      "abcdefghijklmnop1234",
+      "sk-proj-abc",
+      "sk_live_51H",
+      "ghp_abc",
+      "xoxb-123",
+      "AKIAABCD",
+      "plain-looking-secret",
+      "hunter2",
+    ]) {
+      expect(out).not.toContain(secret);
+    }
+  });
+
+  it("leaves ordinary text alone", async () => {
+    const text = "Refund order A-1001 for customer 42, skip weekends, basic plan";
+    expect(await logged({ note: text })).toBe(JSON.stringify({ note: text }));
+  });
+
+  it("stays linear on long adversarial strings", async () => {
+    const started = performance.now();
+    await logged({ note: `Bearer ${"a".repeat(200_000)} eyJ${"x".repeat(200_000)}` });
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});
