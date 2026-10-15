@@ -1,6 +1,6 @@
 {
   "name": "agent-permission-kit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Give your AI agents permissions, not unlimited access. Allow, deny, or require human approval for every tool call — in-process, typed, fail-closed.",
   "keywords": [
     "ai",
@@ -76,6 +76,16 @@
     },
     "./package.json": "./package.json"
   },
+  "typesVersions": {
+    "*": {
+      "mcp": [
+        "./dist/mcp.d.cts"
+      ],
+      "testing": [
+        "./dist/testing.d.cts"
+      ]
+    }
+  },
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
@@ -84,7 +94,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "check:package": "publint --strict && env -u npm_config_dry_run attw --pack . --profile node16",
+    "check:package": "publint --strict && env -u npm_config_dry_run attw --pack .",
     "examples": "node examples/basic/index.ts && node examples/conditional-rules/index.ts && node examples/human-approval/index.ts && node examples/mcp-server/client.ts",
     "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run check:package",
     "bench": "pnpm build && node bench/index.ts"

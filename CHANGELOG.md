@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-15
+
+### Fixed
+
+- TypeScript projects using `moduleResolution: "node"` (node10) can now import
+  the `agent-permission-kit/mcp` and `agent-permission-kit/testing` subpaths
+  (`typesVersions` fallback). `check:package` now fails on any resolution mode.
+
 ## [0.1.0] - 2026-10-15
 
 ### Added
