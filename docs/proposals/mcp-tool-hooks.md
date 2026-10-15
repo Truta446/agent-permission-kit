@@ -2,9 +2,11 @@
 
 Upstream discussion: [typescript-sdk#1928](https://github.com/modelcontextprotocol/typescript-sdk/issues/1928)
 (tool lifecycle hooks) and [#1238](https://github.com/modelcontextprotocol/typescript-sdk/issues/1238)
-(middleware for `McpServer`), both labeled *needs decision*. This file is the
-comment we intend to add there. It is based on building `guardMcpServer`,
-which today has to wrap `registerTool` because no hook exists.
+(middleware for `McpServer`), both labeled *needs decision*. Posted as
+[a comment on #1238](https://github.com/modelcontextprotocol/typescript-sdk/issues/1238#issuecomment-6199952489),
+answering the maintainer's question about where handler composition falls
+short. It is based on building `guardMcpServer`, which has to wrap
+`registerTool` because no hook exists.
 
 ## What we had to wrap, and why that is fragile
 
@@ -56,13 +58,3 @@ new McpServer(info, {
   ],
 });
 ```
-
-## Evidence that per-handler gates drift
-
-In a production admin MCP server with 129 tools, each handler called its own
-gate. One write tool checked "any writing role", while the equivalent web
-console route required a narrower capability. As a result, a less-privileged
-role could do through the assistant what the console forbade. Nothing caught
-it, because the check sat inside one handler out of 129, and a unit test even
-asserted the wrong behavior. With a central hook and a policy table, the
-mismatch showed up as soon as the table was reviewed.
