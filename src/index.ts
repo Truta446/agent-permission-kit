@@ -25,6 +25,7 @@ export type {
   PolicyContext,
   PolicyFunction,
   PolicyResult,
+  ReplayStore,
   Rule,
   RuleResult,
   Rules,

@@ -117,7 +117,9 @@ export type DenialCode =
   | "approval_error"
   | "approval_timeout"
   | "aborted"
-  | "audit_failed";
+  | "audit_failed"
+  /** The configured `replayStore` threw, rejected or timed out. */
+  | "replay_check_failed";
 
 /** Record of a granted approval, as reported by the approval callback. */
 export interface ApprovalGrant {
@@ -240,6 +242,11 @@ export type AuditInputOption = boolean | ((input: unknown, tool: string) => unkn
 
 // ----------------------------------------------------------------- options
 
+/** Shared store for replay protection. See `GuardOptions.replayStore`. */
+export interface ReplayStore {
+  claim(requestId: string): boolean | Promise<boolean>;
+}
+
 export interface GuardOptions<TTools extends ToolMap = ToolMap, TContext = unknown> {
   /** Rule table. Exact names win over `prefix.*`; longer prefixes win over shorter ones. */
   readonly rules: Rules<TTools, TContext>;
@@ -262,6 +269,21 @@ export interface GuardOptions<TTools extends ToolMap = ToolMap, TContext = unkno
    * can block the event loop. Default 100 000.
    */
   readonly maxInputNodes?: number;
+  /**
+   * Snapshot plain objects with a `null` prototype, so a polluted
+   * `Object.prototype` cannot supply fields that are absent from the input
+   * (`input.isAdmin` stays `undefined`). Handlers then can't call
+   * `input.hasOwnProperty(...)`; use `Object.hasOwn(input, ...)`. Default `false`.
+   */
+  readonly nullPrototypeInput?: boolean;
+  /**
+   * Where caller-supplied `requestId`s are remembered, for replay protection
+   * across processes (Redis `SET key 1 NX EX ttl`, a unique DB row…).
+   * `claim(id)` must atomically record the id and resolve `true` the first
+   * time, `false` afterwards. Errors and timeouts (`policyTimeoutMs`) deny with
+   * `replay_check_failed`. Default: in memory, last 10 000 ids, per guard.
+   */
+  readonly replayStore?: ReplayStore;
   /** Receives structured audit events from `execute()`. */
   readonly onAudit?: AuditHandler;
   /** Called when `onAudit` throws or rejects. Defaults to `console.error`. */

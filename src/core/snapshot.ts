@@ -25,11 +25,20 @@ export class InvalidInputError extends Error {
  * Cost is linear in the size of the input (about the same as `structuredClone`);
  * `maxNodes` bounds how long one call can block the event loop.
  */
-export function snapshotInput(value: unknown, maxNodes = DEFAULT_MAX_INPUT_NODES): unknown {
-  return copy(value, 0, new Set(), { left: maxNodes });
+export function snapshotInput(
+  value: unknown,
+  maxNodes = DEFAULT_MAX_INPUT_NODES,
+  nullPrototype = false,
+): unknown {
+  return copy(value, 0, new Set(), { left: maxNodes, nullPrototype });
 }
 
-function copy(value: unknown, depth: number, seen: Set<object>, budget: { left: number }): unknown {
+function copy(
+  value: unknown,
+  depth: number,
+  seen: Set<object>,
+  budget: { left: number; readonly nullPrototype: boolean },
+): unknown {
   if (--budget.left < 0) throw new InvalidInputError("Input is too large");
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
@@ -62,7 +71,9 @@ function copy(value: unknown, depth: number, seen: Set<object>, budget: { left: 
     if (Object.getOwnPropertySymbols(value).length > 0) {
       throw new InvalidInputError("Input contains symbol keys");
     }
-    const obj: Record<string, unknown> = {};
+    // With nullPrototype, a polluted Object.prototype cannot fill in fields
+    // that are absent from the input.
+    const obj: Record<string, unknown> = budget.nullPrototype ? Object.create(null) : {};
     for (const key of Object.keys(value)) {
       if (key === "__proto__") throw new InvalidInputError('Input contains a "__proto__" key');
       obj[key] = copy((value as Record<string, unknown>)[key], depth + 1, seen, budget);

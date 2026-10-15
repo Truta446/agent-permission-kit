@@ -4,6 +4,7 @@ import { errorName, GuardConfigError, own } from "./errors.js";
 import { isValidRequestId, isValidToolName } from "./names.js";
 import { compilePolicy, type Evaluation, evaluatePolicy } from "./policies.js";
 import { DEFAULT_MAX_INPUT_NODES, snapshotInput } from "./snapshot.js";
+import { runWithDeadline } from "./timeout.js";
 import type {
   ApprovalGrant,
   ApprovalRequest,
@@ -17,6 +18,7 @@ import type {
   GuardOptions,
   HandlerContext,
   PolicyResult,
+  ReplayStore,
   ToolMap,
 } from "./types.js";
 
@@ -77,6 +79,8 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
     "maxInputNodes",
     DEFAULT_MAX_INPUT_NODES,
   );
+  const nullPrototypeInput = own(options, "nullPrototypeInput") === true;
+  const replayStore = readReplayStore(own(options, "replayStore"));
   const requireAudit = own(options, "requireAudit") === true;
   if (requireAudit && onAudit === undefined) {
     // Otherwise nothing would ever be recorded and every call would still run.
@@ -102,6 +106,17 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
       if (oldest !== undefined) seenRequestIds.delete(oldest);
     }
     return true;
+  };
+
+  /** `true` = first use, `false` = replay, `"error"` = the store failed (deny). */
+  const claimRequestId = async (id: string): Promise<boolean | "error"> => {
+    if (replayStore === undefined) return rememberRequestId(id);
+    try {
+      const claimed: unknown = await runWithDeadline(() => replayStore.claim(id), policyTimeoutMs);
+      return claimed === true; // anything but a literal `true` is not a first use
+    } catch {
+      return "error";
+    }
   };
 
   const newRequestId = (): string => {
@@ -155,7 +170,10 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
     let input: unknown;
     try {
       const rawInput = own(request, "input");
-      input = rawInput === undefined ? undefined : snapshotInput(rawInput, maxInputNodes);
+      input =
+        rawInput === undefined
+          ? undefined
+          : snapshotInput(rawInput, maxInputNodes, nullPrototypeInput);
     } catch (error) {
       const tooLarge = error instanceof Error && error.message === "Input is too large";
       return invalid(
@@ -250,7 +268,14 @@ export function createGuard<TTools extends ToolMap = ToolMap, TContext = unknown
     }
     const { input, signal } = prepared;
 
-    if (prepared.callerSuppliedId && !rememberRequestId(prepared.requestId)) {
+    const claimed = prepared.callerSuppliedId ? await claimRequestId(prepared.requestId) : true;
+    if (claimed === "error") {
+      const base = { ...prepared, decision: "deny" as const, ruleId: null };
+      const reason = "Replay protection is unavailable; refusing to execute";
+      await audit.emit(event("tool.denied", base, reason, input, { code: "replay_check_failed" }));
+      return deny(base, "replay_check_failed", reason);
+    }
+    if (!claimed) {
       const base = { ...prepared, decision: "deny" as const, ruleId: null };
       const reason =
         "A request with this requestId was already processed; refusing to run it again";
@@ -414,6 +439,20 @@ function readTimeout(value: unknown, name: string, fallback: number): number {
     throw new GuardConfigError(`${name} must be a positive number of milliseconds`);
   }
   return value;
+}
+
+function readReplayStore(value: unknown): ReplayStore | undefined {
+  if (value === undefined) return undefined;
+  // `claim` may live on a class prototype (a RedisReplayStore instance); the
+  // option itself is read as an own property, so pollution can't supply it.
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as ReplayStore).claim !== "function"
+  ) {
+    throw new GuardConfigError("replayStore must be an object with a claim(requestId) method");
+  }
+  return value as ReplayStore;
 }
 
 function readPositiveInteger(value: unknown, name: string, fallback: number): number {
