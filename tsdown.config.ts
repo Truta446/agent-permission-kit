@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     mcp: "src/adapters/mcp.ts",
+    testing: "src/testing.ts",
   },
   format: ["esm", "cjs"],
   platform: "neutral",

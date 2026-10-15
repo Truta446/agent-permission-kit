@@ -19,8 +19,9 @@
     "rootDir": ".",
     "paths": {
       "agent-permission-kit": ["./src/index.ts"],
-      "agent-permission-kit/mcp": ["./src/adapters/mcp.ts"]
+      "agent-permission-kit/mcp": ["./src/adapters/mcp.ts"],
+      "agent-permission-kit/testing": ["./src/testing.ts"]
     }
   },
-  "include": ["src", "tests", "examples", "*.config.ts"]
+  "include": ["src", "tests", "examples", "*.config.ts", "bench"]
 }
