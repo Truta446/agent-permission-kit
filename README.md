@@ -3,6 +3,7 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/agent-permission-kit"><img src="https://img.shields.io/npm/v/agent-permission-kit?color=cb3837&logo=npm" alt="npm version"></a>
   <a href="https://github.com/Truta446/agent-permission-kit/actions/workflows/ci.yml"><img src="https://github.com/Truta446/agent-permission-kit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="zero dependencies">
   <img src="https://img.shields.io/badge/types-TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
