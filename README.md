@@ -10,6 +10,7 @@
   <img src="https://img.shields.io/badge/MCP-SDK%20v1%20%2B%20v2-8B7CFF" alt="MCP SDK v1 and v2">
   <img src="https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white" alt="Node 22+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <a href="https://m8ven.ai/mcp/truta446-agent-permission-kit-boc9tf?s=readme"><img src="https://m8ven.ai/badge/mcp/truta446-agent-permission-kit-boc9tf?v=85ad6025e74cf8b5a48eb252b822f08f" alt="M8ven Score"></a>
 </p>
 
 <p align="center">
