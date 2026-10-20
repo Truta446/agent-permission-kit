@@ -311,6 +311,18 @@ framework executes the tool, so the frozen-snapshot binding of `execute()`
 does not apply there. `canUseTool` does bind: it returns the authorized
 snapshot as `updatedInput`. Decisions are audited as `policy.evaluated`.
 
+## Agent skill
+
+[`skills/agent-permission-kit`](skills/agent-permission-kit) is a [SKILL.md](skills/agent-permission-kit/SKILL.md) skill. It teaches a coding agent (Claude Code, Codex CLI, Cursor, Gemini CLI…) to add this library to a project end to end: inventory the tools, write the policy table, wire it in, set up approvals and audit, and add tests.
+
+```sh
+# Claude Code, for one project (use ~/.claude/skills for every project)
+mkdir -p .claude/skills
+cp -r path/to/agent-permission-kit/skills/agent-permission-kit .claude/skills/
+```
+
+Then ask: *"Add a permission layer to my MCP server: db.delete admin-only, payments over $100 need approval."*
+
 ## Security model
 
 **Guaranteed, and covered by tests in [`tests/`](tests):**
