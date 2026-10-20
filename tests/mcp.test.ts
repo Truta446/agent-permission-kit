@@ -74,7 +74,19 @@ describe.each(sdks)("MCP %s", (_label, make) => {
     }));
     const del = vi.fn(async () => ({ content: [{ type: "text" as const, text: "deleted" }] }));
     const other = vi.fn(async () => ({ content: [{ type: "text" as const, text: "other" }] }));
-    server.registerTool("db.read", { inputSchema: z.object({ id: z.number() }) }, read);
+    server.registerTool(
+      "db.read",
+      {
+        inputSchema: z.object({ id: z.number() }),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      read,
+    );
     server.registerTool("db.delete", { inputSchema: z.object({ id: z.number() }) }, del);
     server.registerTool("db.unlisted", {}, other);
 

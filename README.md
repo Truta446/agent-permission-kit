@@ -242,9 +242,14 @@ const guard = createGuard({
 const server = new McpServer({ name: "notes", version: "1.0.0" });
 guardMcpServer(server, guard); // call before registering tools
 
-server.registerTool("notes.read", { inputSchema: z.object({ id: z.string() }) }, async ({ id }) => ({
-  content: [{ type: "text", text: await notes.get(id) }],
-}));
+server.registerTool(
+  "notes.read",
+  {
+    inputSchema: z.object({ id: z.string() }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ id }) => ({ content: [{ type: "text", text: await notes.get(id) }] }),
+);
 // Every tool registered from now on is guarded under its own name.
 // Tools without a rule are denied.
 ```

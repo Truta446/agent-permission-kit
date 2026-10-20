@@ -36,25 +36,65 @@ guardMcpServer(server, guard); // must come before registerTool
 
 server.registerTool(
   "notes.read",
-  { description: "Read a note", inputSchema: z.object({ id: z.string() }) },
+  {
+    description: "Read a note",
+    inputSchema: z.object({ id: z.string() }),
+    // Hosts use these hints to warn users before risky calls; declare all four.
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
   async ({ id }) => ({ content: [{ type: "text", text: `Note ${id}: buy milk` }] }),
 );
 
 server.registerTool(
   "notes.delete",
-  { description: "Delete a note", inputSchema: z.object({ id: z.string() }) },
+  {
+    description: "Delete a note",
+    inputSchema: z.object({ id: z.string() }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
   async ({ id }) => ({ content: [{ type: "text", text: `Deleted ${id}` }] }),
 );
 
 server.registerTool(
   "payments.refund",
-  { description: "Refund a payment", inputSchema: z.object({ amount: z.number() }) },
+  {
+    description: "Refund a payment",
+    inputSchema: z.object({ amount: z.number() }),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
   async ({ amount }) => ({ content: [{ type: "text", text: `Refunded $${amount}` }] }),
 );
 
 // No rule at all → denied by default.
-server.registerTool("shell.exec", { description: "Run a shell command" }, async () => ({
-  content: [{ type: "text", text: "this never runs" }],
-}));
+server.registerTool(
+  "shell.exec",
+  {
+    description: "Run a shell command",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  async () => ({
+    content: [{ type: "text", text: "this never runs" }],
+  }),
+);
 
 await server.connect(new StdioServerTransport());

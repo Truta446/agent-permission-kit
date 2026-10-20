@@ -37,7 +37,18 @@ describe("MCP SDK v1 compatibility", () => {
     const refund = vi.fn(async ({ amount }: { amount: number }) => ({
       content: [{ type: "text" as const, text: `refunded ${amount}` }],
     }));
-    server.registerTool("db.read", {}, read);
+    server.registerTool(
+      "db.read",
+      {
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      read,
+    );
     server.registerTool("refund", { inputSchema: { amount: z.number() } }, refund);
     server.registerTool("db.drop", {}, vi.fn());
     expect((await call("db.read")).isError).toBeFalsy();

@@ -69,9 +69,22 @@ bench
 async function mcpClient(guarded: boolean) {
   const server = new McpServer({ name: "b", version: "1" });
   if (guarded) guardMcpServer(server, createGuard({ rules: { "db.read": "allow" } }));
-  server.registerTool("db.read", { inputSchema: { id: z.number() } }, async ({ id }) => ({
-    content: [{ type: "text", text: String(id) }],
-  }));
+  server.registerTool(
+    "db.read",
+    {
+      description: "Read one row",
+      inputSchema: { id: z.number() },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ id }) => ({
+      content: [{ type: "text", text: String(id) }],
+    }),
+  );
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "c", version: "1" });
   await Promise.all([server.connect(st), client.connect(ct)]);
